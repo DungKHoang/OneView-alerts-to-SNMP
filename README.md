@@ -4,7 +4,7 @@ The script alerts-to-snmp.ps1 matches OV alerts with SNMP OID trap generated
 This is useful in the scenraio where administrator wants to find OneView alerts that has SNMP OIID trap attached to it
 
 ## Prerequisites
-The  script requires":
+The  script requires:
    * the latest OneView PowerShell library : https://github.com/HewlettPackard/POSH-HPOneView/releases
 
 
