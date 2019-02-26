@@ -3,9 +3,9 @@ Param ( [string]$OVApplianceIP      ="",
         [string]$OVAdminPassword    ="password",
         [string]$OneViewModule      = "HPOneView.410",  
 
-        [string]$Start              = '01/01/2019' ,
-        [string]$End                = '01/01/2019' , 
-        [string]$Severity           = 'Critical',
+        [dateTime]$Start              = (get-date -day 1) ,
+        [dateTime]$End                = (get-date) , 
+        [string]$Severity           = '',                 # default will be critical and warning
 
         [string]$OVAuthDomain       = "local"
 
@@ -37,8 +37,9 @@ Function Prepare-OutFile ([string]$Outfile)
     
     New-Item $OutFile -ItemType file -Force -ErrorAction Stop | Out-Null
     
-    $HeaderText = "Alert_TypeID|Alert_description|snmpOID"
+    $HeaderText = "AlertTypeID|AlertDescription|snmpOID|CorrectiveAction"
 
+    write-host -ForegroundColor Cyan "CSV file --> $((dir $outFile).FullName)"
     Set-content -path $outFile -Value $HeaderText
 }
 
@@ -70,20 +71,31 @@ $appliance = $connection.name
 # ---------------------------
 #  Generate Output files
 
-$timeStamp          = get-date -format MMM-dd-yyyy
+$timeStamp          = get-date -format MMM-yyyy
     
-$OutFile            = "alert-snmp-$appliance.CSV"
+$OutFile            = "alert-snmp-$appliance-$timeStamp.CSV"
 
+$startDate          = $start.ToShortDateString()
+$endDate            = $end.ToShortDateString()
 Write-Host -ForegroundColor Cyan "CSV file -->     $OutFile  "
 write-host -ForegroundColor CYAN "##NOTE: Delimiter used in the CSV file is '|' "
-
+Write-host -ForegroundColor CYAN "`nCollecting Alert from $StartDate to $endDate on OneView $appliance ....`n"
 $scriptCode         =  New-Object System.Collections.ArrayList
+if ( [string]::IsNullOrWhiteSpace($Severity))
+{
+    $ListofAlerts   = get-hpovalert -Start $Start -End $End | where {($_.Severity -eq 'Critical') -or ($_.Severity -eq 'Warning')}
+}
+else 
+{
+    $ListofAlerts   = get-hpovalert -Start $Start -End $End -Severity $Severity
+}
 
-$ListofAlerts   = get-hpovalert -Start $Start -End $End -Severity $Severity
 foreach ($alert in $ListofAlerts)
 {
     $alertDescription           = $alert.Description
     $alertTypeID                = $alert.alertTypeID
+    $correctiveAction           = $alert.CorrectiveAction
+
     foreach ($eventUri in $alert.associatedEventUris)
     {
         if ($eventUri)
@@ -96,14 +108,14 @@ foreach ($alert in $ListofAlerts)
                 $value          = ""
                 if ($eventName -match '^\d.')
                 {
-                    $value              = "$alertTypeID|$alertDescription|$eventName"
+                    $value              = "$alertTypeID|$alertDescription|$eventName|$correctiveAction"
                     [void]$scriptCode.Add('{0}' -f $value)
                 }
                 else 
                 {
                     if ($eventSnmpOid -match '^\d.')
                     {
-                        $value          = "$alertTypeID|$alertDescription|$eventSnmpOid"
+                        $value          = "$alertTypeID|$alertDescription|$eventSnmpOid|$correctiveAction"
                         [void]$scriptCode.Add('{0}' -f $value) 
                     }
 
