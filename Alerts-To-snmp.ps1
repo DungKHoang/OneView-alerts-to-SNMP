@@ -1,13 +1,15 @@
 Param ( [string]$OVApplianceIP      ="",
-        [string]$OVAdminName        ="Administrator", 
-        [string]$OVAdminPassword    ="password",
+        [string]$OVlistCSV          = "",
+        [PScredential]$OVcredential = $Null,
+        [string]$OVAdminName        ="", 
+        [string]$OVAdminPassword    ="",
+        [string]$OVAuthDomain       = "local",
+
         [string]$OneViewModule      = "HPOneView.410",  
 
         [dateTime]$Start              = (get-date -day 1) ,
         [dateTime]$End                = (get-date) , 
-        [string]$Severity           = '',                 # default will be critical and warning
-
-        [string]$OVAuthDomain       = "local"
+        [string]$Severity           = ''                 # default will be critical and warning
 
 )
 #$ErrorActionPreference = 'SilentlyContinue'
@@ -43,7 +45,6 @@ Function Prepare-OutFile ([string]$Outfile)
     Set-content -path $outFile -Value $HeaderText
 }
 
-
 Function Out-ToScriptFile ([string]$Outfile)
 {
     if ($ScriptCode)
@@ -56,38 +57,61 @@ Function Out-ToScriptFile ([string]$Outfile)
     } 
 }
 
-import-module HPOneView.410
+# ---------------- Modules import
+#
+import-module $OneViewModule 
 
-
+$isImportExcelPresent   = (get-module -name "ImportExcel" -listavailable ) -ne $NULL
+if (-not $isImportExcelPresent )
+{   write-host -foreground YELLOW "Import Excel mopdule not found. Install the module with the command -->  install-module ImportExcel "}
 
 
 # ---------------- Connect to OneView appliance
 #
+$ScriptDir          = Split-Path $script:MyInvocation.MyCommand.Path
+# ---------------- Connect to OneView appliance
+#
 write-host -ForegroundColor Cyan "-----------------------------------------------------"
-write-host -ForegroundColor Cyan "Connect to the OneView appliance..."
+write-host -ForegroundColor Cyan "Connect to OneView appliance..."
 write-host -ForegroundColor Cyan "-----------------------------------------------------"
-$connection = Connect-HPOVMgmt -appliance $OVApplianceIP -user $OVAdminName -password $OVAdminPassword -LoginAcknowledge:$true -AuthLoginDomain $OVAuthDomain
-$appliance = $connection.name
+if (-not $OVcredential)
+{
+    $OVcredential  = get-credential -message "Provide  credential to access the Oneview environment..."
+}
+if ([string]::IsNullOrEmpty($OVlistCSV) -or (-not (test-path -path $OVlistCSV)) )
+{
+    Connect-HPOVMgmt -appliance $OVApplianceIP -Credential $OVcredential 
+}
+else 
+{
+    $OVlistCSV      = $OVlistCSV.Split($Delimiter)[-1]
+    $OVlistCSV      = "$ScriptDir\$OVlistCSV"
+
+    type $OVlistCSV | % { Connect-HPOVMgmt -Hostname $_ -Credential $OVcredential }    
+}
+
 # ---------------------------
 #  Generate Output files
 
-$timeStamp          = get-date -format MMM-yyyy
+$timeStamp          = get-date -format dd-MMM-yyyy
     
-$OutFile            = "alert-snmp-$appliance-$timeStamp.CSV"
+$OutFile            = "alert-snmp-$timeStamp.CSV"
 
 $startDate          = $start.ToShortDateString()
 $endDate            = $end.ToShortDateString()
 Write-Host -ForegroundColor Cyan "CSV file -->     $OutFile  "
 write-host -ForegroundColor CYAN "##NOTE: Delimiter used in the CSV file is '|' "
-Write-host -ForegroundColor CYAN "`nCollecting Alert from $StartDate to $endDate on OneView $appliance ....`n"
+
+foreach ($connection in $global:connectedSessions) {}
+Write-host -ForegroundColor CYAN "`nCollecting Alert from $StartDate to $endDate on OneView $connection ....`n"
 $scriptCode         =  New-Object System.Collections.ArrayList
 if ( [string]::IsNullOrWhiteSpace($Severity))
 {
-    $ListofAlerts   = get-hpovalert -Start $Start -End $End | where {($_.Severity -eq 'Critical') -or ($_.Severity -eq 'Warning')}
+    $ListofAlerts   = get-hpovalert -ApplianceConnection $connection  -Start $Start -End $End | where {($_.Severity -eq 'Critical') -or ($_.Severity -eq 'Warning')}
 }
 else 
 {
-    $ListofAlerts   = get-hpovalert -Start $Start -End $End -Severity $Severity
+    $ListofAlerts   = get-hpovalert -ApplianceConnection $connection -Start $Start -End $End -Severity $Severity
 }
 
 foreach ($alert in $ListofAlerts)
@@ -100,7 +124,7 @@ foreach ($alert in $ListofAlerts)
     {
         if ($eventUri)
         {
-            $ev      = send-HPOVRequest -uri $eventUri
+            $ev      = send-HPOVRequest -uri $eventUri -hostname $connection.Name
             foreach ($evItem in $ev.eventDetails)
             {
                 $eventName      = $evItem.eventItemName
@@ -121,7 +145,6 @@ foreach ($alert in $ListofAlerts)
 
                 }
 
-
             }
         }
     }
@@ -129,9 +152,21 @@ foreach ($alert in $ListofAlerts)
 $scriptCode = $scriptCode.ToArray() 
 Out-ToScriptFile -Outfile $outFile 
 
+# --------------- Create Excel File
+#
+if ($isImportExcelPresent)
+{
+    $excelFile  = (Dir $outFile).BaseName + ".xlsx"
+    import-csv -delimiter '|' $outFile | export-Excel -Path $excelFile -WorksheetName "snmp"
+}
+
+
 
 write-host -ForegroundColor Cyan "-----------------------------------------------------"
 write-host -ForegroundColor Cyan "Disconnect from OneView appliance ................"
 write-host -ForegroundColor Cyan "-----------------------------------------------------"
 
-Disconnect-HPOVMgmt 
+Disconnect-HPOVMgmt -ApplianceConnection $global:connectedSessions
+
+  
+CONFIDENTIALITY NOTICE This message and any included attachments are from Cerner Corporation and are intended only for the addressee. The information contained in this message is confidential and may constitute inside or non-public information under international, federal, or state securities laws. Unauthorized forwarding, printing, copying, distribution, or use of such information is strictly prohibited and may be unlawful. If you are not the addressee, please promptly delete this message and notify the sender of the delivery error by e-mail or you may call Cerner's corporate offices in Kansas City, Missouri, U.S.A at (+1) (816)221-1024.
